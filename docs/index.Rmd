@@ -1,0 +1,527 @@
+---
+title: "Estimación y supuestos del modelo clásico de regresión lineal"
+author: "Oscar García Cervantes - Taller de economía cuantitativa VI"
+date: "`r format(Sys.time(), '%A %d de %B, %Y')`"
+output:
+     html_document:
+           toc: true
+           toc_float:
+                   collapsed: false
+                   smooth_scroll: false
+           toc_depth: 3       
+editor_options: 
+  markdown: 
+    wrap: 72
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_chunk$set(fig.align = 'center', echo = TRUE)
+```
+
+# 1. Paqueterías
+
+Para esta sesión utilizaremos las paqueterías `tidyverse`, `olsrr`,
+`tseries`, `broom`, `lmtest`, `car`, `lubridate`, `ggfortify`,
+`ggthemes`, `strucchange` y `forecast`.
+
+
+```{r, warning = FALSE, message = FALSE}
+library(tidyverse)
+library(olsrr)
+library(tseries)
+library(broom)
+library(lmtest)
+library(car)
+library(lubridate)
+library(ggfortify)
+library(ggthemes)
+library(strucchange)
+library(forecast)
+```
+
+# 2. Bases de datos
+
+Utilizaremos dos bases de datos. La primera corresponde a algunos
+indicadores trimestrales obtenidos del [Banco de Información
+Económica](https://www.inegi.org.mx/sistemas/bie/) del INEGI. La segunda
+incluye el PIB de Estados Unidos y se obtuvo del Federal Reserve
+Economic Data ([FRED](https://fred.stlouisfed.org/series/GDPC1)).
+
+Como primer paso establecemos el directorio de trabajo con el comando
+`setwd()` y cargamos las bases de datos.
+
+```{r}
+Base1 <- read_csv("BIE.csv", col_names = TRUE)
+Base2 <- read_csv("GDPC1.csv")
+```
+
+Ahora damos un vistazo a las bases.
+
+```{r}
+View(Base1)
+View(Base2)
+str(Base1)
+str(Base2)
+```
+
+<br/> Observamos que en ambas bases de datos tenemos la información
+desde 1994-1Q hasta 2021-4Q, que representan 112 observaciones. Las
+variables en la `Base1` son el PIB total (`PIB`), consumo del gobierno
+(`Consumo_Gob`), formación bruta de capital fijo pública y privada
+(`FBKF_Pub` y `FBKF_Priv`) y exportación de bienes y servicios
+(`Exp_ByS`); todas las variables están en valores absolutos, variación
+trimestral y variación anual. La `Base2` tiene como variable al PIB de
+Estados Unidos (`GDP`); los datos también están en valores absolutos,
+variación trimestral y variación anual.
+
+Primero añadimos las variables de la `Base2` a la `Base1`.
+
+```{r}
+Base1$GDP_EUA <- Base2$GDP
+Base1$VT_GDP_EUA <- Base2$VT_GDP_EUA
+Base1$VA_GDP_EUA <- Base2$VA_GDP_EUA
+```
+
+<br/> Obsevamos cómo quedó la `Base1`.
+
+```{r}
+head(Base1, n = 6)
+```
+
+<br/> Un aspecto importante es que para ambas bases la variable que
+determina el periodo es de tipo (clase) texto. Necesitamos cambiar el
+formato de `Periodo` para poder visualizar de manera correcta los
+valores.
+
+```{r}
+Base1$Periodo <- yq(Base1$Periodo)
+str(Base1)
+```
+
+# 3. Visualización de datos
+
+```{r}
+ggplot(Base1, aes(x = Periodo)) +
+     geom_line(aes(y = VA_PIB, color = "PIB")) + 
+     geom_line(aes(y = VA_GDP_EUA, color = "GDP_EUA")) +
+     geom_line(aes(y = VA_Exp_ByS, color = "Exp_ByS")) +
+     geom_line(aes(y = VA_FBKF_Pub, color = "FBKF_Pub")) + 
+     geom_line(aes(y = VA_FBKF_Priv, color = "FBKF_Priv")) +
+     geom_line(aes(y = Consumo_Gob_VA, color = "Consumo_Gob")) +
+     labs(title = "Variación anual de variables seleccionadas (1994-2021)",
+          subtitle = "BIE-INEGI y FRED",
+          x = "Fecha",
+          y = "Variación porcentual",
+          colour = "Variables") +
+     theme_bw(base_family = "serif") + 
+     scale_x_date(date_breaks = "2 year", date_labels = "%Y") + 
+     theme(axis.text.x = element_text(angle = 90)) +
+     scale_color_brewer(palette = "Paired")
+          
+```
+
+<br/> Ahora visualizamos de manera individual el **PIB** que será
+nuestra variable dependiente.
+
+<br/>
+
+```{r, echo = FALSE}
+ggplot(Base1, aes(x = Periodo, y = VA_PIB)) +
+     geom_line(color = "darkcyan") +
+     labs(title = "Variación anual del PIB en México (1994-2021)",
+          subtitle = "BIE-INEGI",
+          x = "Fecha",
+          y = "Variación porcentual") +
+     theme_classic(base_family = "serif") + 
+     scale_x_date(date_breaks = "2 year", date_labels = "%Y") + 
+     theme(axis.text.x = element_text(angle = 90)) + 
+     geom_hline(yintercept = 0, linetype = "dotted")
+```
+
+<br/>
+
+# 4. Regresión lineal
+
+El primer modelo que estimaremos mediante el método de MCO será con las
+variables en valores absolutos. El segundo modelo utilizará las
+variaciones anuales. El tercer modelo será un log-lineal. Por último se
+estimará un modelo log-log con los valores absolutos.
+
+## 4.1 Significancia de los coeficientes y sentido económico
+
+```{r}
+m1 <- lm(PIB ~ Consumo_Gob + FBKF_Pub + FBKF_Priv + Exp_ByS + GDP_EUA, data = Base1)
+m2 <- lm(VA_PIB ~ Consumo_Gob_VA + VA_FBKF_Pub + VA_FBKF_Priv + VA_Exp_ByS + VA_GDP_EUA, data = Base1)
+m3 <- lm(log(PIB) ~ Consumo_Gob + FBKF_Pub + FBKF_Priv + Exp_ByS + GDP_EUA, data = Base1)
+m4 <- lm(log(PIB) ~ log(Consumo_Gob) + log(FBKF_Pub) + log(FBKF_Priv) + log(Exp_ByS) + log(GDP_EUA), data = Base1)
+tidy(m1)
+tidy(m2)
+tidy(m3)
+tidy(m4)
+```
+
+<br/>
+
+Despues de evaluar la significancia estadística de las variables
+estimaremos los modelos `m1` y `m2` sin la variable `Consumo_Gob`.
+
+<br/>
+
+```{r}
+m1_2 <- lm(PIB ~ FBKF_Pub + FBKF_Priv + Exp_ByS + GDP_EUA, data = Base1)
+m2_2 <- lm(VA_PIB ~ VA_FBKF_Pub + VA_FBKF_Priv + VA_Exp_ByS + VA_GDP_EUA, data = Base1)
+tidy(m1_2)
+tidy(m2_2)
+```
+
+<br/> De los modelos estimados observamos que la variable que muestra
+una mayor relación con el PIB mexicano es el PIB de Estados Unidos.
+Podemos observar esta relación si graficamos unicamente las dos series.
+
+<br/>
+
+```{r, echo = FALSE}
+ggplot(Base1, aes(x = Periodo)) +
+     geom_line(aes(y = VA_PIB, color = "PIB_MX")) + 
+     geom_line(aes(y = VA_GDP_EUA, color = "PIB_EUA")) +
+     labs(title = "Variación anual de variables seleccionadas (1994-2021)",
+          subtitle = "BIE-INEGI y FRED",
+          x = "Fecha",
+          y = "Variación porcentual",
+          colour = "Variables") +
+     theme_classic(base_family = "serif") + 
+     scale_x_date(date_breaks = "2 year", date_labels = "%Y") + 
+     theme(axis.text.x = element_text(angle = 90)) +
+     scale_color_brewer(palette = "Dark2") +
+     geom_hline(yintercept = 0, linetype = "dotted")
+```
+
+## 4.2 Bondad de ajuste de los modelos
+
+De aquí en adelante trabajaremos unicamente con los modelos `m1_2`,
+`m2_2` y `m4`. Obtenemos la $R^2$, la $R^2 ajd$ y el estadístico $F$.
+
+```{r}
+glance(m1_2)
+glance(m2_2)
+glance(m4)
+```
+
+Todos los modelos muestran $R^2$ y $R^2 adj$ superiores al **0.9**.
+Además, rechazamos la hipótesis nula de la Prueba F donde
+$H_0:\beta_1=\beta_2=\beta_k=0$, es decir, rechazamos que las variables
+del modelo sean simultaneamente nulas. <br/>
+
+# 5. Supuesto de normalidad
+
+Una vez estimado el modelo y habiendo analizado el sentido económico de
+las variables independientes, llevamos a cabo pruebas de correcta
+especificación. La primera prueba es la de normalidad.
+
+Podemos visualizar los errores para ver su comportamiento y analizar si
+se distribuyen como una normal.
+
+```{r}
+autoplot(m1_2, which = 1:2, nrow =2, ncol = 1)
+autoplot(m2_2, which = 1:2, nrow =2, ncol = 1)
+autoplot(m4, which = 1:2, nrow =2, ncol = 1)
+```
+
+<br/>
+
+Para comprobar el supuesto de normalidad utilizamos la prueba
+Jarque-Bera. La hipótesis nula de esta prueba es que los errores se
+distribuyen como una normal, $H_0: Errores\ normales$ o $H_0:s=0,c=3$.
+
+```{r}
+jarque.bera.test(m1_2$residuals)
+jarque.bera.test(m2_2$residuals)
+jarque.bera.test(m4$residuals)
+```
+
+Los resultados de la prueba Jarque-Bera nos indican que para los modelos
+`m2_2` y `m4` no rechazamos la hipótesis nula, es decir, los errores se
+distribuyen como una normal, mientras que en el modelo `m1_2` al tener
+un $p\ value < 0.05$ rechazamos la hipótesis nula y aceptamos la
+hipótesis alternativa de no normalidad en los errores.
+
+Una ventaja de graficar los errores, es que nos indica qué observaciones
+son outliers y podemos generar variables ficticias para esas
+observaciones. <br/>
+
+# 6. Supuesto de homocedasticidad
+
+Para revisar si los errores de nuestros modelos tienen varianza
+constantes, es decir, si son homocedasticos utilizamos la prueba de
+[Breusch-Pagan](https://cran.r-project.org/web/packages/olsrr/vignettes/heteroskedasticity.html#:~:text=Breusch%20Pagan%20Test,-Breusch%20Pagan%20Test&text=It%20is%20used%20to%20test,is%20a%20%CF%872%20test.).
+El test asume que los errores se distribuyen como una normal. La
+hipótesis nula es que los errores son homocedasticos,
+$H_0:varianza\ constante$.
+
+```{r}
+ols_test_breusch_pagan(m1_2)
+ols_test_breusch_pagan(m2_2)
+ols_test_breusch_pagan(m4)
+```
+
+En los modelos `m1_2` y `m2_2` rechazamos la hipótesis nula de varianza
+constante de los errores, es decir, existe heterocedasticidad. Mientras
+que para el modelo `m4` no se rechaza la hipóesis nula, por lo que para
+esta estimación los errores tienen varianza constante.
+
+# 7 Supuesto de multicolinealidad
+
+Para probar la existencia de multicolinealidad primero observamos la
+correlaciones entre las variables independientes. Como primer paso
+extraemos las variables independientes en una base para después generar
+una matriz de correlaciones.
+
+```{r}
+Variables_ind <- Base1 %>%
+        select(FBKF_Pub, FBKF_Priv, Exp_ByS, GDP_EUA)
+cor(Variables_ind)
+```
+
+Observamos que existe un fuerte correlación positiva entre las variables
+`FBKF_Priv`, `Exp_ByS` y `GDP_EUA`.
+
+Ahora realizamos la prueba de multicolinealidad del Factor de inflación
+de la varianza (VIF).
+
+```{r}
+vif(m1_2)
+vif(m2_2)
+vif(m4)
+```
+
+La regla sobre el VIF es que existe multicolinealidad si el promedio de
+todos los valores es mayor a 10 o el mayor tiene un valor superior a 10.
+Los modelos `m1_2` y `m4` muestran multicolinealidad, las variables con
+valores más altos son son las exportaciones de bienes y servicios
+`Exp_ByS` y el PIB de Estados Unidos `GDP_EUA`. Esto se explica porque
+las exportaciones de la economía mexicana se concentran altamente en la
+economía estadounidense.
+
+Una de las formas para solucionar el problema de multicolinealidad es
+transformar las variables, esta es una de las posibles razones por las
+que el modelo `m2_2` no muestra multicolinealidad, ya que los valores
+son las tasas de crecimiento de las variables utilizadas en el modelo
+`m1_2`.
+
+# 8. Supuesto de cambio estructural
+
+Para probar si existe cambio estructural utilizamos el test de Chow.
+
+```{r}
+sctest(m1_2, type = "Chow")
+sctest(m2_2, type = "Chow")
+sctest(m4, type = "Chow")
+```
+
+Los modelos `m1_2` y `m4` presenta cambio estructural al presentar un
+$p-value < 0.05$. Para el modelo `m2_2` no rechazamos la hipótesis nula
+$H_0:\beta_1=\beta_2$.
+
+# 9. Soluciones al incumplimiento de los supuestos del MCRL
+
+Como primer paso, generamos un variable dummy para suavizar la caida de
+las variables ocasionada por el confinamiento derivado de la pandemia de
+la COVID-19 en el segundo trimestre de 2020.
+
+```{r}
+Base1 <- Base1 %>%
+     mutate(ficticia1 = ifelse(VA_PIB < -15, 1, 0))
+```
+
+Como segundo paso, estimamos los modelos `m1_2` y `m4` sin la variable
+`Exp_ByS` para solucionar la multicolinealidad; además agregamos la
+variable dummy en los modelos.
+
+```{r}
+m1_3 <- lm(PIB ~ FBKF_Pub + FBKF_Priv + GDP_EUA + ficticia1, data = Base1)
+m2_3 <- lm(VA_PIB ~ VA_FBKF_Pub + VA_FBKF_Priv + VA_Exp_ByS + VA_GDP_EUA + ficticia1, data = Base1)
+m4_2 <- lm(log(PIB) ~ log(Consumo_Gob) + log(FBKF_Pub) + log(FBKF_Priv) + log(GDP_EUA) + ficticia1, data = Base1)
+
+summary(m1_3)
+summary(m2_3)
+summary(m4_2)
+```
+
+En esta nueva especificación la variable `FBKF_Pub` dejó de ser
+significativa en los modelos `m1_3` y `m4_2`. Generamos una nueva
+estimación sin esta variable.
+
+```{r}
+m1_4 <- lm(PIB ~ FBKF_Priv + GDP_EUA + ficticia1, data = Base1)
+m4_3 <- lm(log(PIB) ~ log(Consumo_Gob) + log(FBKF_Priv) + log(GDP_EUA) + ficticia1, data = Base1)
+
+summary(m1_4)
+summary(m4_3)
+```
+
+Nuevamente realizamos las pruebas de normalidad, de homocedasticidad,
+multicolinealidad y de cambio estructural a los modelos `m1_4`, `m2_3` y
+`m4_3`.
+
+```{r}
+jarque.bera.test(m1_4$residuals)
+ols_test_breusch_pagan(m1_4)
+vif(m1_4)
+sctest(m1_4, type = "Chow")
+jarque.bera.test(m2_3$residuals)
+ols_test_breusch_pagan(m2_3)
+vif(m2_3)
+sctest(m2_3, type = "Chow")
+jarque.bera.test(m4_3$residuals)
+ols_test_breusch_pagan(m4_3)
+vif(m4_3)
+sctest(m4_3, type = "Chow")
+```
+
+Los modelos `m1_4` y `m2_3` cumplen con los supuestos de normalidad,
+homocedasticiad y de no multicolinealidad. Mientras que la nueva
+estimación del modelo `m4_3`, no cumple con los supuestos de normalidad
+y sigue mostrando multicolinealidad. Respecto al supuesto de cambio
+estructural el único modelo que no presenta cambio estructural es el
+`m2_3` esto porque los valores son tasas de crecimiento y los datos
+atípicos se suavizan.
+
+Generamos una nueva estimación para el modelo `m4_3` sin considerar la
+variable `log(Consumo_Gob)` que es la que muestra una valor mayor del
+test VIF, y realizamos las pruebas nuevamente.
+
+```{r}
+m4_4 <- lm(log(PIB) ~ log(FBKF_Priv) + log(GDP_EUA) + ficticia1, data = Base1)
+summary(m4_4)
+jarque.bera.test(m4_4$residuals)
+ols_test_breusch_pagan(m4_4)
+vif(m4_4)
+sctest(m4_4, type = "Chow")
+```
+
+El modelo `m4_4` muestra errores con distribución normal, con varianza
+constante, no muestra multicolinealidad, pero continua presentando
+cambio estructructural.
+
+# 10. Supuesto de autocorrelación
+
+La autocorrelación se define como la correlación entre miembros de
+series de observaciones ordenadas en el tiempo. En el contexto del MCRL
+se supone que no existe autocorrelación en los errores $E(u_iu_j)=0$.
+
+Para probar autocorrelación serial utilizamos las pruebas de
+Durbin-Watson y Breusch-Godfrey, como se muestra a continuación:
+
+
+```{r}
+dwtest(m1_4)
+dwtest(m2_3)
+dwtest(m4_4)
+bgtest(m1_4)
+bgtest(m2_3)
+bgtest(m4_4)
+```
+
+Todos los modelos presentan autocorrelación positiva
+$D-W Statistic [0-2)$. La presencia de autocorrelación es algo
+característico de los modelos de series de tiempo.
+
+# 11. Pronósticos
+
+Los pronósticos serán realizados para el modelo `m1_4` y los correspondientes a los modelos `m2_3` y `m4_4` quedan como actividad para los alumnos.
+
+Obtenemos los coeficientes del modelo `m1_4` para recordar la forma funcional y el valor de los coeficientes obtenidos en la regresión. Además, visualizamos los valores observados y estimados (fitted values).
+
+```{r}
+summary(m1_4)
+
+m1_4_fitted <- Base1$PIB - residuals(m1_4)
+m1_4_fitted2 <- m1_4$fitted.values
+m1_4_fit <- cbind(m1_4_fitted, m1_4_fitted2)
+View(m1_4_fit)
+
+ggplot(Base1, aes(Periodo)) +
+        geom_line(aes(y = PIB, color = "PIB")) + 
+        geom_line(aes(y = m1_4_fitted, color = "PIB_Estimados")) +
+        labs(title = "PIB observado y estimado (1994-2021)",
+          x = "Fecha",
+          y = "Millones de pesos a precios de 2013",
+          colour = "Variables") +
+        theme_bw(base_family = "serif") + 
+        scale_x_date(date_breaks = "2 year", date_labels = "%Y") + 
+        theme(axis.text.x = element_text(angle = 90))
+
+```
+
+
+## 11.1 Pronósticos con base en supuestos de expectativas de expertos u organizaciones
+
+Primero establecemos una nueva base llamada `Base1_m1_4` la cual contiene sólo las variables utilizadas en el modelo `m1_4`.
+
+El siguiente paso es generar un dataframe que contenga los periodos para los que se generarán los pronósticos, lo nombramos como `amp`. Posteriormente, nombramos las variables del nuevo dataframe y le damos formato de fecha a la variable `Periodo` con el código `amp$Periodo <- yq(amp$Periodo)`, el cual indica que la variable tiene formato de año y trimestre. Después unimos los dataframes `Base1_m1_4` y `amp`.
+
+```{r}
+Base1_m1_4 <- Base1 %>%
+  select(Periodo, PIB, FBKF_Priv, GDP_EUA, ficticia1)
+
+amp <- data.frame(c("2022-1", "2022-2", "2022-3", "2022-4"),
+                  c(NA, NA, NA, NA),
+                  c(NA, NA, NA, NA),
+                  c(NA, NA, NA, NA),
+                  c(0, 0, 0, 0))
+
+names(amp) <- c("Periodo", "PIB", "FBKF_Priv", "GDP_EUA", "ficticia1")
+
+amp$Periodo <- yq(amp$Periodo)
+
+Pronostico <- rbind(Base1_m1_4, amp)
+
+```
+
+Para los supuestos de expectativas de los expertos podemos utilizar la información de la [Encuesta sobre las Expectativas de los Especialistas en Economía del Sector Privado: Abril 2022](www.banxico.org.mx/publicaciones-y-prensa/encuestas-sobre-las-expectativas-de-los-especialis/%7BDF2FBFAC-67E1-F173-0839-DAA65AE58831%7D.pdf) del [Banco de México](https://www.banxico.org.mx/publicaciones-y-prensa/encuestas-sobre-las-expectativas-de-los-especialis/encuestas-expectativas-del-se.html). Esta encuesta provee el pronóstico de crecimiento para el PIB de Estados Unidos, que para 2022 presenta una estimación promedio de $3.17\%$ anual; y para la `FBKF_Priv` podemos suponer que crecerá de acuerdo a la media de la variación anual, que es de $2.6\%$.
+
+Ahora, sustituimos los valores en el nuevo dataframe considerando los supuestos.
+
+```{r}
+Pronostico$FBKF_Priv[113] <- Pronostico$FBKF_Priv[109]*1.026
+Pronostico$FBKF_Priv[114] <- Pronostico$FBKF_Priv[110]*1.026
+Pronostico$FBKF_Priv[115] <- Pronostico$FBKF_Priv[111]*1.026
+Pronostico$FBKF_Priv[116] <- Pronostico$FBKF_Priv[112]*1.026
+
+Pronostico$GDP_EUA[113] <- Pronostico$GDP_EUA[109]*1.0317
+Pronostico$GDP_EUA[114] <- Pronostico$GDP_EUA[110]*1.0317
+Pronostico$GDP_EUA[115] <- Pronostico$GDP_EUA[111]*1.0317
+Pronostico$GDP_EUA[116] <- Pronostico$GDP_EUA[112]*1.0317
+
+tail(Pronostico, n = 8)
+```
+
+Teniendo la información de las variables independientes podemos estimar los valores para la variable dependiente de la siguiente manera:
+
+```{r}
+M1_4 <- forecast(m1_4, newdata = Pronostico, h=4)
+Pronostico$Pronostico_PIB <- M1_4$mean
+
+Pronostico$PIB[113] <- Pronostico$Pronostico_PIB[113]
+Pronostico$PIB[114] <- Pronostico$Pronostico_PIB[114]
+Pronostico$PIB[115] <- Pronostico$Pronostico_PIB[115]
+Pronostico$PIB[116] <- Pronostico$Pronostico_PIB[116]
+```
+
+Por último, graficamos el PIB con los valores pronosticados.
+
+```{r}
+ggplot(Pronostico, aes(Periodo, PIB)) + 
+  geom_line() +
+  geom_hline(yintercept = 17786344, linetype = "dotted", color = "red") +
+  labs(title = "PIB observado (1994-2021) y pronostico (2022)",
+          x = "Fecha",
+          y = "Millones de pesos a precios de 2013") +
+        theme_bw(base_family = "serif") + 
+        scale_x_date(date_breaks = "2 year", date_labels = "%Y") +
+        theme(axis.text.x = element_text(angle = 90))
+
+```
+
+
